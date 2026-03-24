@@ -71,7 +71,6 @@ export default async function handler(req, res) {
     try {
         const encodedProtocol = encodeURIComponent(protocolo.trim().toUpperCase());
         
-        // 3. Batemos no Supabase por tráz dos panos (invisível para o usuário)
         const [resSefrep, resSeape] = await Promise.all([
             fetch(`${SUPABASE_URL}/rest/v1/sefrep_registros?protocolo=ilike.*${encodedProtocol}*&select=*`, { method: 'GET', headers: defaultHeaders }),
             fetch(`${SUPABASE_URL}/rest/v1/seape_registros?protocolo=ilike.*${encodedProtocol}*&select=*`, { method: 'GET', headers: defaultHeaders })
@@ -87,13 +86,59 @@ export default async function handler(req, res) {
 
         const [dadosSefrep, dadosSeape] = await Promise.all([resSefrep.json(), resSeape.json()]);
 
-        // 4. Juntamos as informações das duas bases
         let todosResultados = [
             ...(dadosSefrep || []).map(p => ({ ...p, origem: 'SEFREP' })),
             ...(dadosSeape || []).map(p => ({ ...p, origem: 'SEAPE' }))
         ];
 
-        // 5. Devolvemos a lista limpa e bonita para o frontend
+        // --- CÁLCULO DE FILA NO BACKEND ---
+        // Se algum dos resultados for um VTC em Análise, buscamos a fila global no banco para calcular a posição
+        const temVtcAtivo = todosResultados.some(p => {
+            const tema = (p.tema || "").toUpperCase();
+            const obs = (p.observacoes || "").toLowerCase();
+            return tema.includes("VTC") && 
+                   !obs.includes("finalizado") && !obs.includes("concluida") && !obs.includes("concluido") &&
+                   !obs.includes("devolvido") && !obs.includes("não faz jus") && !obs.includes("nao faz jus");
+        });
+
+        if (temVtcAtivo) {
+            const resFila = await fetch(`${SUPABASE_URL}/rest/v1/sefrep_registros?tema=ilike.*VTC*&or=(status.ilike.*lise*,status.ilike.*andamento*,status.ilike.*exig*)&select=*`, { method: 'GET', headers: defaultHeaders });
+            if (resFila.ok) {
+                let filaAtivaVTC = await resFila.json();
+                filaAtivaVTC.sort((a, b) => {
+                    const d1 = new Date(a.data_entrada || 0).getTime();
+                    const d2 = new Date(b.data_entrada || 0).getTime();
+                    if (d1 === d2) {
+                        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+                    }
+                    return d1 - d2;
+                });
+
+                todosResultados = todosResultados.map(p => {
+                    const isEmAnaliseVTC = (p.tema || "").toUpperCase().includes("VTC") && 
+                        !(p.observacoes || "").toLowerCase().includes("finalizado") &&
+                        !(p.observacoes || "").toLowerCase().includes("devolvido") &&
+                        !(p.observacoes || "").toLowerCase().includes("não faz jus");
+                    
+                    if (isEmAnaliseVTC) {
+                        const indexNaFila = filaAtivaVTC.findIndex(f => f.id === p.id);
+                        if (indexNaFila >= 0) {
+                            p._posicaoFila = indexNaFila + 1;
+                            
+                            const dataEntradaReal = p.data_entrada ? new Date(p.data_entrada) : new Date();
+                            const diasDecorridos = Math.floor((new Date() - dataEntradaReal) / (1000 * 60 * 60 * 24));
+                            let diasEst = 60 + Math.floor(indexNaFila * 0.25) - diasDecorridos;
+                            if (diasEst > 120) diasEst = 120;
+                            if (diasEst < 30) diasEst = 30;
+                            p._diasEstimados = diasEst;
+                        }
+                    }
+                    return p;
+                });
+            }
+        }
+
+        // 5. Devolvemos a lista limpa e enriquecida para o frontend
         return res.status(200).json(todosResultados);
 
     } catch (error) {
