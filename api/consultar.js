@@ -1,25 +1,73 @@
+// =========================================================================
+// MÓDULO DE RATE LIMITING (Proteção contra abuso por IP)
+// =========================================================================
+// Armazena contadores por IP. Na Vercel serverless, cada instância mantém
+// seu próprio Map. Numa instância quente, bloqueia rajadas de um mesmo IP.
+// Limite: 10 consultas por IP a cada 2 minutos.
+const rateLimitMap = new Map();
+const RATE_LIMIT_MAX = 10;       // máximo de requisições
+const RATE_LIMIT_WINDOW = 120000; // janela de 2 minutos (ms)
+
+function verificarRateLimit(ip) {
+    const agora = Date.now();
+    const registro = rateLimitMap.get(ip);
+
+    if (!registro || (agora - registro.inicio) > RATE_LIMIT_WINDOW) {
+        rateLimitMap.set(ip, { contador: 1, inicio: agora });
+        return true;
+    }
+
+    if (registro.contador >= RATE_LIMIT_MAX) {
+        return false; // BLOQUEADO
+    }
+
+    registro.contador++;
+    return true;
+}
+
+// Limpa IPs antigos a cada 5 minutos para não acumular memória
+setInterval(() => {
+    const agora = Date.now();
+    for (const [ip, reg] of rateLimitMap) {
+        if ((agora - reg.inicio) > RATE_LIMIT_WINDOW * 2) {
+            rateLimitMap.delete(ip);
+        }
+    }
+}, 300000);
+
+// =========================================================================
+// FUNÇÃO PRINCIPAL DO PROXY SEGURO
+// =========================================================================
 export default async function handler(req, res) {
-    // A Vercel automaticamente roda essa função em um servidor escondido (Node.js)
 
     // -------------------------------------------------------------
-    // PROTEÇÃO E PERMISSÃO DE DOMÍNIOS EXTERNOS (CORS)
+    // PROTEÇÃO CORS (Somente domínio oficial)
     // -------------------------------------------------------------
-    // Aqui nós estamos "Avisando a Vercel" para aceitar receber chamadas
-    // vindas dos domínios do GitHub Pages ou de qualquer outro site de fora.
     res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', 'https://uresuzano.github.io'); // Restrição CORS: somente o domínio oficial
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader('Access-Control-Allow-Origin', 'https://uresuzano.github.io');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Turnstile-Token');
 
-    // Navegadores fazem um "aviso prévio" de segurança chamado OPTIONS. 
-    // Precisamos sempre aprovar para o CORS funcionar!
     if (req.method === 'OPTIONS') {
         res.status(200).end();
         return;
     }
+
     // -------------------------------------------------------------
-    
-    // 1. Pegamos o que o frontend enviou via URL (ex: /api/consultar?protocolo=URE-X)
+    // RATE LIMITING POR IP
+    // -------------------------------------------------------------
+    const ipCliente = req.headers['x-forwarded-for']?.split(',')[0]?.trim() 
+                   || req.headers['x-real-ip'] 
+                   || req.socket?.remoteAddress 
+                   || 'desconhecido';
+
+    if (!verificarRateLimit(ipCliente)) {
+        return res.status(429).json({ 
+            erro: "⚠️ Limite de consultas atingido. Você realizou muitas buscas em pouco tempo. Aguarde 2 minutos e tente novamente." 
+        });
+    }
+
+    // 1. Protocolo informado pelo frontend
     const { protocolo } = req.query;
 
     if (!protocolo) {
@@ -57,11 +105,8 @@ export default async function handler(req, res) {
         console.error("Erro no Cloudflare:", e);
         return res.status(500).json({ erro: "Falha ao validar sistema anti-robô." });
     }
-    // -------------------------------------------------------------
 
-    // 2. Chaves de Acesso
-    // ATENÇÃO: O ideal é mover isso para o painel "Environment Variables" da Vercel depois!
-    // Ex: const SUPABASE_URL = process.env.SUPABASE_URL;
+    // 2. Chaves de Acesso (Exclusivamente de variáveis de ambiente)
     const SUPABASE_URL = process.env.SUPABASE_URL;
     const SUPABASE_KEY = process.env.SUPABASE_KEY;
     if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -98,7 +143,6 @@ export default async function handler(req, res) {
         ];
 
         // --- CÁLCULO DE FILA NO BACKEND ---
-        // Se algum dos resultados for um VTC em Análise, buscamos a fila global no banco para calcular a posição
         const temVtcAtivo = todosResultados.some(p => {
             const tema = (p.tema || "").toUpperCase();
             const obs = (p.observacoes || "").toLowerCase();
@@ -142,6 +186,29 @@ export default async function handler(req, res) {
                     return p;
                 });
             }
+        }
+
+        // =============================================================
+        // MÓDULO DE AUDITORIA LGPD (Art. 37 — Registro de Operações)
+        // Grava log de cada consulta no Supabase de forma assíncrona
+        // (fire-and-forget: NÃO bloqueia a resposta ao usuário)
+        // =============================================================
+        try {
+            const registroAuditoria = {
+                ip_hash: ipCliente.substring(0, 3) + '***' + ipCliente.slice(-2), // IP mascarado (LGPD)
+                protocolo_consultado: protocolo.trim().toUpperCase(),
+                resultados_encontrados: todosResultados.length,
+                data_consulta: new Date().toISOString()
+            };
+
+            // Dispara e esquece — não espera resposta para não atrasar o usuário
+            fetch(`${SUPABASE_URL}/rest/v1/audit_consultas`, {
+                method: 'POST',
+                headers: { ...defaultHeaders, 'Prefer': 'return=minimal' },
+                body: JSON.stringify(registroAuditoria)
+            }).catch(err => console.error("Falha silenciosa no log de auditoria:", err));
+        } catch (auditErr) {
+            console.error("Erro no módulo de auditoria:", auditErr);
         }
 
         // 5. Devolvemos a lista limpa e enriquecida para o frontend
