@@ -1,0 +1,19 @@
+# ========================================
+# .gitignore — URE Suzano (Backend API)
+# ========================================
+
+# Variáveis de ambiente (NUNCA subir chaves!)
+.env
+.env.local
+.env.production
+
+# Dependências Node.js
+node_modules/
+
+# Artefatos do sistema
+.DS_Store
+Thumbs.db
+*.log
+
+# Vercel
+.vercel/

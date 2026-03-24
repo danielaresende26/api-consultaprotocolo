@@ -7,7 +7,7 @@ export default async function handler(req, res) {
     // Aqui nós estamos "Avisando a Vercel" para aceitar receber chamadas
     // vindas dos domínios do GitHub Pages ou de qualquer outro site de fora.
     res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', '*'); // Permite conexões do github.io
+    res.setHeader('Access-Control-Allow-Origin', 'https://uresuzano.github.io'); // Restrição CORS: somente o domínio oficial
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Turnstile-Token');
 
@@ -34,7 +34,10 @@ export default async function handler(req, res) {
         return res.status(403).json({ erro: "Acesso negado: Validação Anti-Robô ausente." });
     }
 
-    const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '0x4AAAAAACvc8XyS9pUWaoIQPatm9D1aXNc';
+    const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
+    if (!TURNSTILE_SECRET) {
+        return res.status(500).json({ erro: "Configuração do servidor incompleta (Anti-Bot)." });
+    }
 
     try {
         const cfFormData = new URLSearchParams();
@@ -59,8 +62,11 @@ export default async function handler(req, res) {
     // 2. Chaves de Acesso
     // ATENÇÃO: O ideal é mover isso para o painel "Environment Variables" da Vercel depois!
     // Ex: const SUPABASE_URL = process.env.SUPABASE_URL;
-    const SUPABASE_URL = process.env.SUPABASE_URL || "https://fdcxcuyxrgbpmcrryiof.supabase.co";
-    const SUPABASE_KEY = process.env.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkY3hjdXl4cmdicG1jcnJ5aW9mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxMTk5NTMsImV4cCI6MjA4OTY5NTk1M30.AGRudVkfcFNGTftdV02NA3Xz6Xs1WzYruqCWLVnF-Rw";
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SUPABASE_KEY = process.env.SUPABASE_KEY;
+    if (!SUPABASE_URL || !SUPABASE_KEY) {
+        return res.status(500).json({ erro: "Configuração do servidor incompleta (BD)." });
+    }
 
     const defaultHeaders = {
         'apikey': SUPABASE_KEY,
