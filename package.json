@@ -1,0 +1,8 @@
+{
+  "name": "api-consultaprotocolo",
+  "version": "1.0.0",
+  "description": "Backend Serverless Vercel",
+  "scripts": {
+    "start": "node"
+  }
+}
