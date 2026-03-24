@@ -34,7 +34,7 @@ export default async function handler(req, res) {
         return res.status(403).json({ erro: "Acesso negado: Validação Anti-Robô ausente." });
     }
 
-    const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '1x0000000000000000000000000000000AA';
+    const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '0x4AAAAAACvc8XyS9pUWaoIQPatm9D1aXNc';
 
     try {
         const cfFormData = new URLSearchParams();
